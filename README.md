@@ -72,10 +72,45 @@ share an Apple ID with iCloud Shortcuts sync on, importing on the Mac syncs
 it over automatically. Otherwise AirDrop, email, or host the `.shortcut`
 file — opening it on iOS shows the same "Add Shortcut" sheet.
 
+## Extracting your existing library (read-only)
+
+[`shortcuts_manager/cli.py`](shortcuts_manager/cli.py) reads the Shortcuts
+app's local Core Data/SQLite store (in `~/Library/Group Containers/
+group.com.apple.shortcuts` and the legacy `group.is.workflow.shortcuts`)
+and dumps it to JSON. It never writes to that store -- see "How Shortcuts
+storage actually works" above for why.
+
+```
+python3 -m shortcuts_manager.cli inspect    # list tables/columns/row counts
+python3 -m shortcuts_manager.cli dump-raw   # dump every row to JSON
+```
+
+Both default to writing into `../ShortcutsExtracted` (override with
+`--out DIR`). BLOB columns are decoded automatically: Core Data
+"transformable" attributes are usually `NSKeyedArchiver`-wrapped plists
+([`shortcuts_manager/nsarchive.py`](shortcuts_manager/nsarchive.py) walks
+that object graph back into plain dicts/lists), plain plists decode
+directly, and anything else falls back to base64 so nothing is lost.
+
+This requires **Full Disk Access** for whichever process actually runs
+`python3` -- the Group Containers are TCC-protected and there's no way
+around that:
+- Running it yourself in Terminal: grant Full Disk Access to **Terminal**
+  (System Settings -> Privacy & Security -> Full Disk Access).
+- Running it through an assistant whose shell is a child of another app
+  (e.g. the Claude desktop app): grant Full Disk Access to **that app**
+  instead.
+
+Run `inspect` first -- the schema is undocumented and not reverse-engineered
+yet in this repo, so `dump-raw`'s output needs to be read to figure out
+which table/columns hold each shortcut's name and action-graph plist before
+a targeted "extract one shortcut by name" command can be built on top.
+
 ## Requirements
 
 - macOS 12+ (for `/usr/bin/shortcuts`)
 - Python 3
 
-Full Disk Access is **not** required for anything in this project — it only
-touches files you point it at, never the protected library store.
+Full Disk Access is **not** required for anything else in this project --
+building, signing, and opening shortcuts only touches files you point it
+at, never the protected library store.
