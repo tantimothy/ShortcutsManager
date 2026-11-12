@@ -3,6 +3,8 @@
 Usage:
     python3 -m shortcuts_manager.cli inspect [--out DIR]
     python3 -m shortcuts_manager.cli dump-raw [--out DIR]
+    python3 -m shortcuts_manager.cli list-shortcuts
+    python3 -m shortcuts_manager.cli extract-one --name NAME [--out DIR]
 
 Requires Full Disk Access for whatever process runs python3 here -- the
 Shortcuts Group Containers are TCC-protected. Read-only: see library.py.
@@ -13,7 +15,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import library
+from . import library, workflow
 
 DEFAULT_OUT = Path("<PROJECTS_DIR>/ShortcutsExtracted")
 
@@ -62,6 +64,37 @@ def cmd_dump_raw(args):
     return 0
 
 
+def cmd_list_shortcuts(args):
+    try:
+        shortcuts = library.list_shortcuts()
+    except FileNotFoundError as e:
+        print(e, file=sys.stderr)
+        return 1
+    for s in shortcuts:
+        print(f"{s['name']}  ({s['action_count']} actions, {s['subtitle']})")
+    return 0
+
+
+def cmd_extract_one(args):
+    try:
+        wf = library.extract_workflow(args.name)
+    except FileNotFoundError as e:
+        print(e, file=sys.stderr)
+        return 1
+    if wf is None:
+        print(f"No shortcut named {args.name!r} found.", file=sys.stderr)
+        return 1
+
+    out_dir = Path(args.out) / "unsigned"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{args.name}.shortcut"
+    workflow.write_unsigned(wf, out_path)
+    print(f"Wrote unsigned, editable plist: {out_path}")
+    print("Edit its WFWorkflowActions, then sign it with:")
+    print(f'  shortcuts sign -m anyone -i "{out_path}" -o "{args.name}.shortcut"')
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="shortcuts_manager")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -73,6 +106,16 @@ def main(argv=None):
     p_dump = sub.add_parser("dump-raw", help="Dump every table's rows to JSON.")
     p_dump.add_argument("--out", default=str(DEFAULT_OUT))
     p_dump.set_defaults(func=cmd_dump_raw)
+
+    p_list = sub.add_parser("list-shortcuts", help="List every shortcut by name.")
+    p_list.set_defaults(func=cmd_list_shortcuts)
+
+    p_extract = sub.add_parser(
+        "extract-one", help="Reconstruct one shortcut as an editable unsigned plist."
+    )
+    p_extract.add_argument("--name", required=True)
+    p_extract.add_argument("--out", default=str(DEFAULT_OUT))
+    p_extract.set_defaults(func=cmd_extract_one)
 
     args = parser.parse_args(argv)
     return args.func(args)

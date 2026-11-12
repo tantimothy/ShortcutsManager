@@ -11,6 +11,10 @@ def comment(text):
     return action("is.workflow.actions.comment", {"WFCommentActionText": text})
 
 
+def text(text_value):
+    return action("is.workflow.actions.gettext", {"WFTextActionText": text_value})
+
+
 def alert(text, title=""):
     return action(
         "is.workflow.actions.alert",

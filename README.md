@@ -11,15 +11,20 @@ There are two separate layers, confirmed by inspecting this Mac:
    dictionary: `WFWorkflowActions`, icon, client version, etc.) is a binary
    plist. This is the layer this project reads and writes.
 
-2. **The app's library index is a private Core Data/SQLite store**, in
-   `~/Library/Group Containers/group.com.apple.shortcuts` (and the legacy
-   `group.is.workflow.shortcuts`). It tracks folders, ordering, run history,
-   and iCloud sync state for *all* your shortcuts, with the actual action
-   data embedded as BLOBs. It's readable (with Full Disk Access granted to
-   whatever tool you use) but undocumented, versioned per-OS, and tied into
-   CloudKit sync tokens — this project deliberately does not write to it.
-   Treat it as read-only/forensic if you ever need to inspect it; build and
-   import shortcuts the supported way instead (below).
+2. **The app's library index is a private Core Data/SQLite store**, at
+   `~/Library/Shortcuts/Shortcuts.sqlite` (confirmed by inspection — 877
+   pages of real data). The Group Containers
+   (`group.com.apple.shortcuts`, `group.is.workflow.shortcuts`) also hold
+   `*.sqlite` files, but the ones under `Temporary/.../ProgressiveMigration/`
+   turned out to be empty 1-page CloudKit migration scratch databases, not
+   the library itself. The real store tracks folders, ordering, run
+   history, and iCloud sync state for *all* your shortcuts, with the
+   actual action data embedded as BLOBs. It's readable (with Full Disk
+   Access granted to whatever tool you use) but undocumented, versioned
+   per-OS, and tied into CloudKit sync tokens — this project deliberately
+   does not write to it. Treat it as read-only/forensic if you ever need
+   to inspect it; build and import shortcuts the supported way instead
+   (below).
 
 ### Signing format
 
@@ -101,10 +106,29 @@ around that:
   (e.g. the Claude desktop app): grant Full Disk Access to **that app**
   instead.
 
-Run `inspect` first -- the schema is undocumented and not reverse-engineered
-yet in this repo, so `dump-raw`'s output needs to be read to figure out
-which table/columns hold each shortcut's name and action-graph plist before
-a targeted "extract one shortcut by name" command can be built on top.
+## Editing an existing shortcut
+
+Confirmed by joining the real tables: `ZSHORTCUT` (name, metadata, and
+foreign keys) -> `ZSHORTCUTACTIONS` (its `ZDATA` column is a **plain
+plist** of `WFWorkflowActions` -- no archiver wrapping) -> `ZSHORTCUTICON`
+(`ZBACKGROUNDCOLORVALUE` / `ZGLYPHNUMBER`). `extract_workflow(name)` in
+[`shortcuts_manager/library.py`](shortcuts_manager/library.py) does that
+join and reconstructs a `WFWorkflow` dict shaped exactly like
+`new_workflow()`'s output, ready to feed back into `write_unsigned()` /
+`sign()`.
+
+```
+python3 -m shortcuts_manager.cli list-shortcuts
+python3 -m shortcuts_manager.cli extract-one --name "Hello World"
+```
+
+`extract-one` writes an unsigned, directly editable plist to
+`ShortcutsExtracted/unsigned/<name>.shortcut`. Edit its
+`WFWorkflowActions`, sign it (`shortcuts sign -m anyone -i ... -o ...`),
+and `open` it to re-import -- Shortcuts.app will offer to add it as a new
+shortcut (same name, so it'll prompt about the existing one rather than
+silently overwriting it, since this tool never touches the live store
+directly).
 
 ## Requirements
 
