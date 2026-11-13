@@ -179,25 +179,28 @@ def cmd_extract_all(args):
         n: w for n, w in workflows.items() if w is not None and w.get("WFWorkflowActions")
     }
     graph = library.build_full_call_graph(graph_workflows)
-    lines = ["# Shortcut call graph", "", "```mermaid", "graph LR"]
-    ids = {name: f"n{i}" for i, name in enumerate(graph_workflows)}
-    for name, node_id in ids.items():
-        label = name.replace('"', "'")
-        lines.append(f'  {node_id}["{label}"]')
-    missing_ids = {}
-    for caller, callees in graph["edges"].items():
-        for callee in callees:
-            if callee in ids:
-                lines.append(f"  {ids[caller]} --> {ids[callee]}")
-            else:
-                if callee not in missing_ids:
-                    missing_id = f"missing{len(missing_ids)}"
-                    missing_ids[callee] = missing_id
-                    label = callee.replace('"', "'")
-                    lines.append(f'  {missing_id}["{label} (missing)"]:::missing')
-                lines.append(f"  {ids[caller]} --> {missing_ids[callee]}")
-    lines.append("  classDef missing stroke-dasharray: 5 5")
-    lines.append("```")
+    mermaid, isolated = library.render_mermaid_call_graph(graph)
+    lines = ["# Shortcut call graph", "", mermaid, ""]
+    if isolated:
+        lines.append(
+            f"## Standalone shortcuts ({len(isolated)})"
+            " -- call nothing and aren't called by anything, left out of the diagram above"
+        )
+        lines.append("")
+        for n in isolated:
+            lines.append(f"- {n}")
+        lines.append("")
+    if graph["missing"]:
+        lines.append("## Dangling references")
+        lines.append("")
+        lines.append(
+            "These shortcuts are called via Run Shortcut but don't exist in the "
+            "library (renamed or deleted):"
+        )
+        lines.append("")
+        for m in graph["missing"]:
+            callers = [c for c, callees in graph["edges"].items() if m in callees]
+            lines.append(f"- **{m}** -- called by: {', '.join(callers)}")
     (out / "inventory" / "call_graph.md").write_text("\n".join(lines) + "\n")
 
     print(f"Extracted {len(workflows)} shortcut(s).")

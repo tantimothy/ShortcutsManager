@@ -14,6 +14,7 @@ import base64
 import json
 import plistlib
 import sqlite3
+from collections import deque
 from datetime import datetime, date
 from pathlib import Path
 
@@ -336,6 +337,66 @@ def build_full_call_graph(workflows):
             if c not in workflows:
                 missing.add(c)
     return {"edges": edges, "missing": sorted(missing)}
+
+
+def render_mermaid_call_graph(graph):
+    """Mermaid source (top-down, `graph TB`) for a build_full_call_graph()
+    result, plus the list of isolated shortcuts (no calls in or out) left
+    out of the diagram entirely -- including all ~100+ unconnected
+    shortcuts as graph nodes is what makes these diagrams unreadable.
+
+    Node order is a rough BFS from root callers (nothing calls them) so
+    Mermaid's layout naturally trends top-left -> bottom-right instead of
+    scattering siblings arbitrarily. Returns (mermaid_markdown, isolated).
+    """
+    edges = graph["edges"]
+    callees = {c for called in edges.values() for c in called}
+    connected = {n for n, called in edges.items() if called} | (callees & edges.keys())
+    isolated = sorted(n for n in edges if n not in connected)
+
+    incoming = {n: 0 for n in connected}
+    for n in connected:
+        for c in edges.get(n, []):
+            if c in incoming:
+                incoming[c] += 1
+
+    order = []
+    visited = set()
+    queue = deque(sorted(n for n in connected if incoming[n] == 0))
+    while queue:
+        n = queue.popleft()
+        if n in visited:
+            continue
+        visited.add(n)
+        order.append(n)
+        for c in edges.get(n, []):
+            if c in connected and c not in visited:
+                queue.append(c)
+    for n in sorted(connected):  # leftover cycle members not reached above
+        if n not in visited:
+            order.append(n)
+            visited.add(n)
+
+    lines = ["```mermaid", "graph TB"]
+    ids = {name: f"n{i}" for i, name in enumerate(order)}
+    for name, node_id in ids.items():
+        lines.append(f'  {node_id}["{name.replace(chr(34), chr(39))}"]')
+
+    missing_ids = {}
+    for caller in order:
+        for callee in edges.get(caller, []):
+            if callee in ids:
+                lines.append(f"  {ids[caller]} --> {ids[callee]}")
+            else:
+                if callee not in missing_ids:
+                    missing_ids[callee] = f"missing{len(missing_ids)}"
+                    label = callee.replace('"', "'")
+                    lines.append(f'  {missing_ids[callee]}["{label} (missing)"]:::missing')
+                lines.append(f"  {ids[caller]} --> {missing_ids[callee]}")
+
+    lines.append("  classDef missing stroke-dasharray: 5 5")
+    lines.append("```")
+    return "\n".join(lines), isolated
 
 
 _ACTION_LABELS = {
