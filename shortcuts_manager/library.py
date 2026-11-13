@@ -423,52 +423,65 @@ def _resolve_text(value):
     return repr(inner)[:80]
 
 
-def describe_action(action, index):
-    """One human-readable line for a single WFWorkflowActions entry."""
+_REPEAT_IDENTIFIERS = {"repeat.count", "repeat.each"}
+
+
+def describe_action(action):
+    """One human-readable pseudocode line for a single WFWorkflowActions
+    entry, with no leading index -- the caller handles indentation for
+    control-flow blocks (If/Otherwise/End If, Repeat/End Repeat)."""
     ident = action.get("WFWorkflowActionIdentifier", "?")
     params = action.get("WFWorkflowActionParameters") or {}
     short = ident.replace("is.workflow.actions.", "")
     label = _ACTION_LABELS.get(short, short.replace(".", " ").replace("_", " ").title())
+    mode = params.get("WFControlFlowMode")
 
     if short == "conditional":
-        mode = params.get("WFControlFlowMode")
         if mode == 0:
             cond = params.get("WFConditionalActionString")
-            suffix = f": {_resolve_text(cond) if isinstance(cond, dict) else cond!r}" if cond is not None else ""
-            return f"{index:>3}. If{suffix}"
+            suffix = f" {_resolve_text(cond) if isinstance(cond, dict) else cond!r}" if cond is not None else ""
+            return f"If{suffix}:"
         if mode == 1:
-            return f"{index:>3}. Otherwise"
-        return f"{index:>3}. End If"
+            return "Otherwise:"
+        return "End If"
+    if short in _REPEAT_IDENTIFIERS:
+        if mode == 0:
+            if short == "repeat.count":
+                times = params.get("WFRepeatCount")
+                times_text = _resolve_text(times) if isinstance(times, dict) else times
+                return f"Repeat {times_text} times:"
+            return f"Repeat with each item in {_resolve_text(params.get('WFInput'))}:"
+        return "End Repeat"
     if short == "setvariable":
-        return f"{index:>3}. Set Variable '{params.get('WFVariableName')}' = {_resolve_text(params.get('WFInput'))}"
+        return f"Set Variable '{params.get('WFVariableName')}' = {_resolve_text(params.get('WFInput'))}"
     if short == "getvariable":
         var = (params.get("WFVariable") or {}).get("Value", {})
-        return f"{index:>3}. Get Variable '{var.get('VariableName', '?')}'"
+        return f"Get Variable '{var.get('VariableName', '?')}'"
     if short == "runworkflow":
         name = params.get("WFWorkflowName") or (params.get("WFWorkflow") or {}).get("workflowName")
-        return f"{index:>3}. Run Shortcut: '{name}'"
+        return f"Run Shortcut: '{name}'"
     if short == "runextension":
         app = (params.get("WFApp") or {}).get("Name") or params.get("WFAppIdentifier")
-        return f"{index:>3}. Share to App: '{app}' -- {_resolve_text(params.get('WFInput'))}"
+        return f"Share to App: '{app}' -- {_resolve_text(params.get('WFInput'))}"
     if short == "openapp":
         app = (params.get("WFSelectedApp") or {}).get("Name") or params.get("WFAppIdentifier")
-        return f"{index:>3}. Open App: '{app}'"
+        return f"Open App: '{app}'"
     if short == "gettext":
-        return f"{index:>3}. Text: {_resolve_text(params.get('WFTextActionText'))}"
+        return f"Text: {_resolve_text(params.get('WFTextActionText'))}"
     if short == "showresult":
-        return f"{index:>3}. Show Result: {_resolve_text(params.get('Text'))}"
+        return f"Show Result: {_resolve_text(params.get('Text'))}"
     if short == "comment":
-        return f"{index:>3}. Comment: {_resolve_text(params.get('WFCommentActionText'))}"
+        return f"Comment: {_resolve_text(params.get('WFCommentActionText'))}"
     if short == "choosefromlist":
         prompt = params.get("WFChooseFromListActionPrompt")
-        return f"{index:>3}. Choose from List" + (f" ({prompt!r})" if prompt else "")
+        return "Choose from List" + (f" ({prompt!r})" if prompt else "")
     if short == "list":
         items = params.get("WFItems")
         if isinstance(items, list) and all(isinstance(i, str) for i in items):
-            return f"{index:>3}. List: {items}"
-        return f"{index:>3}. List"
+            return f"List: {items}"
+        return "List"
     if short == "properties.articles":
-        return f"{index:>3}. Get Details of Article: {params.get('WFContentItemPropertyName')}"
+        return f"Get Details of Article: {params.get('WFContentItemPropertyName')}"
 
     # Generic fallback: show scalar top-level params, resolve text-shaped ones.
     parts = []
@@ -480,15 +493,25 @@ def describe_action(action, index):
         elif isinstance(value, dict) and ("Value" in value or "string" in value):
             parts.append(f"{key}={_resolve_text(value)!r}")
     suffix = " (" + ", ".join(parts[:4]) + ")" if parts else ""
-    return f"{index:>3}. {label}{suffix}"
+    return f"{label}{suffix}"
 
 
 def write_action_list(workflow, name, out_path):
-    """Human-readable Markdown listing of every action in `workflow`."""
+    """Human-readable, indented pseudocode listing of every action in
+    `workflow` -- If/Otherwise/End If and Repeat/End Repeat blocks are
+    nested, matching the shortcut's actual control flow."""
     actions = workflow.get("WFWorkflowActions") or []
     lines = [f"# {name}", "", f"{len(actions)} action(s)", ""]
-    for i, a in enumerate(actions):
-        lines.append(describe_action(a, i))
+    depth = 0
+    indent = "    "
+    for a in actions:
+        params = a.get("WFWorkflowActionParameters") or {}
+        mode = params.get("WFControlFlowMode")
+        if mode in (1, 2):
+            depth = max(depth - 1, 0)
+        lines.append(indent * depth + describe_action(a))
+        if mode in (0, 1):
+            depth += 1
     Path(out_path).write_text("\n".join(lines) + "\n")
 
 
