@@ -163,6 +163,8 @@ def cmd_extract_all(args):
             failed.append(name)
             continue
         unsigned_path = unsigned_dir / f"{safe}.shortcut"
+        signed_path = signed_dir / f"{safe}.shortcut"
+        old_bytes = unsigned_path.read_bytes() if unsigned_path.exists() else None
         workflow.write_unsigned(wf, unsigned_path)
         library.write_action_list(wf, name, actions_dir / f"{safe}.md")
         # The DB's cached ZACTIONCOUNT is unreliable (confirmed stale on
@@ -170,8 +172,16 @@ def cmd_extract_all(args):
         if len(wf.get("WFWorkflowActions") or []) == 0:
             empty.append(name)
             continue
+        # `shortcuts sign` embeds a fresh nonce/signature every run, so a
+        # byte-identical unsigned plist still produces a different signed
+        # binary -- re-signing unconditionally would mark every shortcut as
+        # changed on every extract-all, even ones that didn't actually
+        # change. Only re-sign when the unsigned plist changed, or the
+        # signed file doesn't exist yet.
+        if old_bytes == unsigned_path.read_bytes() and signed_path.exists():
+            continue
         try:
-            workflow.sign(unsigned_path, signed_dir / f"{safe}.shortcut", mode="anyone")
+            workflow.sign(unsigned_path, signed_path, mode="anyone")
         except subprocess.CalledProcessError:
             sign_failed.append(name)
 

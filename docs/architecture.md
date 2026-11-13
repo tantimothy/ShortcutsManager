@@ -96,3 +96,12 @@ shortcut it writes `unsigned/<name>.shortcut`, signs it to
 DB's cached action count is unreliable, only the actually-decoded list
 counts), writes `inventory/actions/<name>.md`, and finally builds and
 writes the whole-library `inventory/call_graph.md`.
+
+Re-signing is skipped when the unsigned plist didn't actually change
+(byte-for-byte) and a signed file already exists. `shortcuts sign` embeds
+a fresh nonce/signature on every run, so signing unconditionally would
+make every shortcut in `signed/` show as changed on every `extract-all`,
+even ones that didn't change at all -- pure git noise. This means a
+shortcut's `signed/` file can lag behind a previous extraction's nonce
+until it actually changes; that's fine, since the binary still
+re-imports correctly either way.
