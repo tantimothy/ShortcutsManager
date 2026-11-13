@@ -152,7 +152,8 @@ def list_shortcuts(db_path=None):
     try:
         rows = con.execute(
             "SELECT ZNAME, ZWORKFLOWID, ZACTIONCOUNT, ZWORKFLOWSUBTITLE "
-            "FROM ZSHORTCUT WHERE ZTOMBSTONED = 0 ORDER BY ZNAME"
+            "FROM ZSHORTCUT WHERE ZTOMBSTONED = 0 AND ZCONFLICTOF IS NULL "
+            "ORDER BY ZNAME"
         ).fetchall()
         return [
             {"name": r[0], "workflow_id": r[1], "action_count": r[2], "subtitle": r[3]}
@@ -178,7 +179,8 @@ def extract_workflow(name, db_path=None):
     try:
         cur = con.cursor()
         row = cur.execute(
-            "SELECT * FROM ZSHORTCUT WHERE ZNAME = ? AND ZTOMBSTONED = 0 LIMIT 1",
+            "SELECT * FROM ZSHORTCUT WHERE ZNAME = ? AND ZTOMBSTONED = 0 "
+            "AND ZCONFLICTOF IS NULL LIMIT 1",
             (name,),
         ).fetchone()
         if row is None:
@@ -235,6 +237,259 @@ def extract_workflow(name, db_path=None):
         return workflow
     finally:
         con.close()
+
+
+def extract_all_workflows(db_path=None):
+    """{name: WFWorkflow dict or None} for every non-tombstoned shortcut.
+
+    None means the shortcut was listed but couldn't be reconstructed (no
+    ZACTIONS row, or a decode failure) -- callers should report these, not
+    silently skip them.
+    """
+    db_path = db_path or find_main_store()
+    if db_path is None:
+        raise FileNotFoundError("No Shortcuts library store found.")
+    workflows = {}
+    for s in list_shortcuts(db_path=db_path):
+        workflows[s["name"]] = extract_workflow(s["name"], db_path=db_path)
+    return workflows
+
+
+RUN_WORKFLOW_IDENTIFIER = "is.workflow.actions.runworkflow"
+
+
+def find_called_shortcuts(actions):
+    """Names of shortcuts invoked by "Run Shortcut" actions within `actions`."""
+    called = []
+    for a in actions or []:
+        if not isinstance(a, dict):
+            continue
+        if a.get("WFWorkflowActionIdentifier") != RUN_WORKFLOW_IDENTIFIER:
+            continue
+        params = a.get("WFWorkflowActionParameters") or {}
+        name = params.get("WFWorkflowName")
+        if not isinstance(name, str):
+            wf_ref = params.get("WFWorkflow")
+            name = None
+            if isinstance(wf_ref, dict):
+                candidate = wf_ref.get("workflowName") or wf_ref.get("WFWorkflowName")
+                if isinstance(candidate, str):
+                    name = candidate
+        # A dynamic target (e.g. a variable instead of a literal name) can't
+        # be resolved statically -- skip it rather than record a non-string.
+        if isinstance(name, str) and name:
+            called.append(name)
+    return called
+
+
+def build_call_graph(root_name, db_path=None):
+    """Recursively extract `root_name` and every shortcut it calls (directly
+    or transitively) via "Run Shortcut" actions.
+
+    Returns {"workflows": {name: WFWorkflow dict or None}, "edges": {name:
+    [called names]}, "missing": [names]}. A workflow is None, and its name
+    listed in "missing", when it's referenced by a Run Shortcut action but
+    not found in the library (deleted, or a sync placeholder).
+    """
+    db_path = db_path or find_main_store()
+    if db_path is None:
+        raise FileNotFoundError("No Shortcuts library store found.")
+
+    workflows = {}
+    edges = {}
+    missing = []
+    stack = [root_name]
+    while stack:
+        name = stack.pop()
+        if name in workflows:
+            continue
+        wf = extract_workflow(name, db_path=db_path)
+        workflows[name] = wf
+        if wf is None:
+            missing.append(name)
+            continue
+        called = find_called_shortcuts(wf.get("WFWorkflowActions"))
+        edges[name] = called
+        for c in called:
+            if c not in workflows:
+                stack.append(c)
+    return {"workflows": workflows, "edges": edges, "missing": missing}
+
+
+def build_full_call_graph(workflows):
+    """Edges (via "Run Shortcut" actions) across an already-extracted set of
+    workflows, e.g. from extract_all_workflows(). Unlike build_call_graph(),
+    this covers every shortcut as a node -- including ones nothing calls and
+    ones that call nothing -- not just what's reachable from one root.
+
+    Returns {"edges": {name: [called names]}, "missing": [names referenced
+    by a Run Shortcut action but not present in `workflows`]}.
+    """
+    edges = {}
+    missing = set()
+    for name, wf in workflows.items():
+        if wf is None:
+            continue
+        called = find_called_shortcuts(wf.get("WFWorkflowActions"))
+        edges[name] = called
+        for c in called:
+            if c not in workflows:
+                missing.add(c)
+    return {"edges": edges, "missing": sorted(missing)}
+
+
+_ACTION_LABELS = {
+    "runworkflow": "Run Shortcut",
+    "runextension": "Share to App",
+    "gettext": "Text",
+    "setvariable": "Set Variable",
+    "getvariable": "Get Variable",
+    "conditional": "If/Otherwise/End If",
+    "choosefromlist": "Choose from List",
+    "repeat.each": "Repeat with Each",
+    "repeat.count": "Repeat",
+    "comment": "Comment",
+    "showresult": "Show Result",
+    "openapp": "Open App",
+    "properties.articles": "Get Details of Article",
+    "getclipboard": "Get Clipboard",
+    "setclipboard": "Set Clipboard",
+    "downloadurl": "Download URL",
+    "getitemname": "Get Item Name",
+    "getrichtextfromhtml": "Get Rich Text from HTML",
+    "url.expand": "Expand URL",
+    "ask": "Ask for Input",
+    "postonfacebook": "Post on Facebook",
+    "tweet": "Post Tweet",
+    "share": "Share",
+    "count": "Count",
+    "list": "List",
+    "number": "Number",
+    "exit": "Stop This Shortcut",
+    "nothing": "Nothing",
+    "alert": "Show Alert",
+    "notification": "Show Notification",
+    "vibrate": "Vibrate",
+    "wait": "Wait",
+    "if": "If",
+    "repeat": "Repeat",
+    "detect.link": "Get URLs from Input",
+    "url": "URL",
+    "openurl": "Open URLs",
+}
+
+
+def _resolve_text(value):
+    """Best-effort plain-text rendering of a WFTextTokenString/Attachment
+    value: variable/output references become {Name}, literal strings pass
+    through, anything else falls back to a short repr."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, dict):
+        return repr(value)[:80]
+
+    def label_of(attachment):
+        if not isinstance(attachment, dict):
+            return "?"
+        if attachment.get("Type") == "Variable":
+            return attachment.get("VariableName", "?")
+        if "OutputName" in attachment:
+            return attachment["OutputName"]
+        return attachment.get("Type", "?")
+
+    inner = value.get("Value", value)
+    if isinstance(inner, dict) and "string" in inner:
+        s = inner["string"]
+        attachments = inner.get("attachmentsByRange") or {}
+        # Each range key is "{start, length}"; placeholders are U+FFFC.
+        by_start = {}
+        for key, attachment in attachments.items():
+            try:
+                start = int(key.strip("{}").split(",")[0].strip())
+            except (ValueError, IndexError):
+                continue
+            by_start[start] = attachment
+        out = []
+        for i, ch in enumerate(s):
+            if ch == "￼" and i in by_start:
+                out.append("{" + label_of(by_start[i]) + "}")
+            elif ch != "￼":
+                out.append(ch)
+        return "".join(out)
+    if isinstance(inner, dict):
+        return "{" + label_of(inner) + "}"
+    return repr(inner)[:80]
+
+
+def describe_action(action, index):
+    """One human-readable line for a single WFWorkflowActions entry."""
+    ident = action.get("WFWorkflowActionIdentifier", "?")
+    params = action.get("WFWorkflowActionParameters") or {}
+    short = ident.replace("is.workflow.actions.", "")
+    label = _ACTION_LABELS.get(short, short.replace(".", " ").replace("_", " ").title())
+
+    if short == "conditional":
+        mode = params.get("WFControlFlowMode")
+        if mode == 0:
+            cond = params.get("WFConditionalActionString")
+            suffix = f": {_resolve_text(cond) if isinstance(cond, dict) else cond!r}" if cond is not None else ""
+            return f"{index:>3}. If{suffix}"
+        if mode == 1:
+            return f"{index:>3}. Otherwise"
+        return f"{index:>3}. End If"
+    if short == "setvariable":
+        return f"{index:>3}. Set Variable '{params.get('WFVariableName')}' = {_resolve_text(params.get('WFInput'))}"
+    if short == "getvariable":
+        var = (params.get("WFVariable") or {}).get("Value", {})
+        return f"{index:>3}. Get Variable '{var.get('VariableName', '?')}'"
+    if short == "runworkflow":
+        name = params.get("WFWorkflowName") or (params.get("WFWorkflow") or {}).get("workflowName")
+        return f"{index:>3}. Run Shortcut: '{name}'"
+    if short == "runextension":
+        app = (params.get("WFApp") or {}).get("Name") or params.get("WFAppIdentifier")
+        return f"{index:>3}. Share to App: '{app}' -- {_resolve_text(params.get('WFInput'))}"
+    if short == "openapp":
+        app = (params.get("WFSelectedApp") or {}).get("Name") or params.get("WFAppIdentifier")
+        return f"{index:>3}. Open App: '{app}'"
+    if short == "gettext":
+        return f"{index:>3}. Text: {_resolve_text(params.get('WFTextActionText'))}"
+    if short == "showresult":
+        return f"{index:>3}. Show Result: {_resolve_text(params.get('Text'))}"
+    if short == "comment":
+        return f"{index:>3}. Comment: {_resolve_text(params.get('WFCommentActionText'))}"
+    if short == "choosefromlist":
+        prompt = params.get("WFChooseFromListActionPrompt")
+        return f"{index:>3}. Choose from List" + (f" ({prompt!r})" if prompt else "")
+    if short == "list":
+        items = params.get("WFItems")
+        if isinstance(items, list) and all(isinstance(i, str) for i in items):
+            return f"{index:>3}. List: {items}"
+        return f"{index:>3}. List"
+    if short == "properties.articles":
+        return f"{index:>3}. Get Details of Article: {params.get('WFContentItemPropertyName')}"
+
+    # Generic fallback: show scalar top-level params, resolve text-shaped ones.
+    parts = []
+    for key, value in params.items():
+        if key in ("UUID", "GroupingIdentifier"):
+            continue
+        if isinstance(value, (str, int, float, bool)):
+            parts.append(f"{key}={value!r}")
+        elif isinstance(value, dict) and ("Value" in value or "string" in value):
+            parts.append(f"{key}={_resolve_text(value)!r}")
+    suffix = " (" + ", ".join(parts[:4]) + ")" if parts else ""
+    return f"{index:>3}. {label}{suffix}"
+
+
+def write_action_list(workflow, name, out_path):
+    """Human-readable Markdown listing of every action in `workflow`."""
+    actions = workflow.get("WFWorkflowActions") or []
+    lines = [f"# {name}", "", f"{len(actions)} action(s)", ""]
+    for i, a in enumerate(actions):
+        lines.append(describe_action(a, i))
+    Path(out_path).write_text("\n".join(lines) + "\n")
 
 
 def _json_default(obj):
