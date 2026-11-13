@@ -339,30 +339,17 @@ def build_full_call_graph(workflows):
     return {"edges": edges, "missing": sorted(missing)}
 
 
-def render_mermaid_call_graph(graph):
-    """Mermaid source (top-down, `graph TB`) for a build_full_call_graph()
-    result, plus the list of isolated shortcuts (no calls in or out) left
-    out of the diagram entirely -- including all ~100+ unconnected
-    shortcuts as graph nodes is what makes these diagrams unreadable.
-
-    Node order is a rough BFS from root callers (nothing calls them) so
-    Mermaid's layout naturally trends top-left -> bottom-right instead of
-    scattering siblings arbitrarily. Returns (mermaid_markdown, isolated).
-    """
-    edges = graph["edges"]
-    callees = {c for called in edges.values() for c in called}
-    connected = {n for n, called in edges.items() if called} | (callees & edges.keys())
-    isolated = sorted(n for n in edges if n not in connected)
-
-    incoming = {n: 0 for n in connected}
-    for n in connected:
+def _topo_order(nodes, edges):
+    """Rough BFS order from root members (nothing in `nodes` calls them)
+    so Mermaid's layout trends top-left -> bottom-right within a cluster."""
+    incoming = {n: 0 for n in nodes}
+    for n in nodes:
         for c in edges.get(n, []):
             if c in incoming:
                 incoming[c] += 1
-
     order = []
     visited = set()
-    queue = deque(sorted(n for n in connected if incoming[n] == 0))
+    queue = deque(sorted(n for n in nodes if incoming[n] == 0))
     while queue:
         n = queue.popleft()
         if n in visited:
@@ -370,33 +357,117 @@ def render_mermaid_call_graph(graph):
         visited.add(n)
         order.append(n)
         for c in edges.get(n, []):
-            if c in connected and c not in visited:
+            if c in nodes and c not in visited:
                 queue.append(c)
-    for n in sorted(connected):  # leftover cycle members not reached above
+    for n in sorted(nodes):  # leftover cycle members not reached above
         if n not in visited:
             order.append(n)
             visited.add(n)
+    return order
 
+
+def _render_mermaid_cluster(order, edges, truly_missing):
+    """`truly_missing` is the library-wide set of names that don't exist
+    anywhere (real dangling references) -- a callee that's merely outside
+    this particular slice (e.g. a hub's neighbor that itself calls
+    something two hops away) is real and just silently dropped, not drawn
+    as a fake "(missing)" node."""
     lines = ["```mermaid", "graph TB"]
     ids = {name: f"n{i}" for i, name in enumerate(order)}
     for name, node_id in ids.items():
         lines.append(f'  {node_id}["{name.replace(chr(34), chr(39))}"]')
-
     missing_ids = {}
     for caller in order:
         for callee in edges.get(caller, []):
             if callee in ids:
                 lines.append(f"  {ids[caller]} --> {ids[callee]}")
-            else:
+            elif callee in truly_missing:
                 if callee not in missing_ids:
                     missing_ids[callee] = f"missing{len(missing_ids)}"
                     label = callee.replace('"', "'")
                     lines.append(f'  {missing_ids[callee]}["{label} (missing)"]:::missing')
                 lines.append(f"  {ids[caller]} --> {missing_ids[callee]}")
-
+            # else: real shortcut, just outside this slice -- omit the edge.
     lines.append("  classDef missing stroke-dasharray: 5 5")
     lines.append("```")
-    return "\n".join(lines), isolated
+    return "\n".join(lines)
+
+
+def render_mermaid_call_graph(graph, max_cluster_size=12):
+    """One Mermaid diagram (top-down, `graph TB`) per weakly-connected
+    cluster of callers/callees, instead of one diagram for the whole
+    library -- a single graph mixing every hub (Post Pic, Share to Social
+    Media, the Glympse family, the Battery/Charger/Low Power family, ...)
+    forces a very wide, squashed layout that's unreadable regardless of
+    direction. Isolated shortcuts (no calls in or out) are left out of
+    every diagram entirely.
+
+    A cluster larger than `max_cluster_size` is also split further: its
+    "hub" nodes (out-degree + in-degree >= 3 within the cluster) each get
+    their own small diagram of just themselves and their direct neighbors,
+    since a hub-and-spoke cluster is still unreadable as one block even
+    though it's technically one connected component.
+
+    Returns [(title, mermaid_markdown), ...], isolated_names.
+    """
+    edges = graph["edges"]
+    truly_missing = set(graph["missing"])
+    callees = {c for called in edges.values() for c in called}
+    connected = {n for n, called in edges.items() if called} | (callees & edges.keys())
+    isolated = sorted(n for n in edges if n not in connected)
+
+    # Undirected adjacency for clustering (a caller and its callee belong
+    # to the same cluster regardless of edge direction).
+    undirected = {n: set() for n in connected}
+    for caller, called in edges.items():
+        if caller not in connected:
+            continue
+        for callee in called:
+            if callee in connected:
+                undirected[caller].add(callee)
+                undirected[callee].add(caller)
+
+    clusters = []
+    seen = set()
+    for start in sorted(connected):
+        if start in seen:
+            continue
+        component = set()
+        queue = deque([start])
+        while queue:
+            n = queue.popleft()
+            if n in component:
+                continue
+            component.add(n)
+            queue.extend(undirected[n] - component)
+        seen |= component
+        clusters.append(component)
+    clusters.sort(key=len, reverse=True)
+
+    sections = []
+    for cluster in clusters:
+        if len(cluster) <= max_cluster_size:
+            order = _topo_order(cluster, edges)
+            title = ", ".join(order[:4]) + (", ..." if len(order) > 4 else "")
+            sections.append((f"{title} ({len(cluster)})", _render_mermaid_cluster(order, edges, truly_missing)))
+            continue
+        degree = {n: len(undirected[n]) for n in cluster}
+        hubs = sorted((n for n in cluster if degree[n] >= 3), key=lambda n: -degree[n])
+        covered = set()
+        for hub in hubs:
+            neighborhood = {hub} | undirected[hub]
+            if neighborhood <= covered:
+                continue
+            covered |= neighborhood
+            order = _topo_order(neighborhood, edges)
+            sections.append((f"{hub} and its direct calls ({len(order)})", _render_mermaid_cluster(order, edges, truly_missing)))
+        leftover = cluster - covered
+        if leftover:
+            order = _topo_order(leftover, edges)
+            title = ", ".join(order[:4]) + (", ..." if len(order) > 4 else "")
+            sections.append((f"{title} ({len(leftover)})", _render_mermaid_cluster(order, edges, truly_missing)))
+
+    return sections, isolated
 
 
 _ACTION_LABELS = {
@@ -513,6 +584,14 @@ def describe_action(action):
                 return f"Repeat {times_text} times:"
             return f"Repeat with each item in {_resolve_text(params.get('WFInput'))}:"
         return "End Repeat"
+    if short == "choosefrommenu":
+        if mode == 0:
+            prompt = params.get("WFMenuPrompt")
+            suffix = f" {_resolve_text(prompt) if isinstance(prompt, dict) else prompt!r}" if prompt else ""
+            return f"Choose from Menu{suffix}:"
+        if mode == 1:
+            return f"Case {params.get('WFMenuItemTitle')!r}:"
+        return "End Choose from Menu"
     if short == "setvariable":
         return f"Set Variable '{params.get('WFVariableName')}' = {_resolve_text(params.get('WFInput'))}"
     if short == "getvariable":
@@ -535,7 +614,10 @@ def describe_action(action):
         return f"Comment: {_resolve_text(params.get('WFCommentActionText'))}"
     if short == "choosefromlist":
         prompt = params.get("WFChooseFromListActionPrompt")
-        return "Choose from List" + (f" ({prompt!r})" if prompt else "")
+        if prompt:
+            text = _resolve_text(prompt) if isinstance(prompt, dict) else prompt
+            return f"Choose from List ({text!r})"
+        return "Choose from List"
     if short == "list":
         items = params.get("WFItems")
         if isinstance(items, list) and all(isinstance(i, str) for i in items):
@@ -560,9 +642,15 @@ def describe_action(action):
 def write_action_list(workflow, name, out_path):
     """Human-readable, indented pseudocode listing of every action in
     `workflow` -- If/Otherwise/End If and Repeat/End Repeat blocks are
-    nested, matching the shortcut's actual control flow."""
+    nested, matching the shortcut's actual control flow.
+
+    Wrapped in a fenced code block: plain consecutive Markdown lines (no
+    blank line between them) get collapsed into one run-on paragraph by
+    any renderer, silently dropping both the line breaks and the
+    indentation -- a code fence is what keeps this readable as pseudocode.
+    """
     actions = workflow.get("WFWorkflowActions") or []
-    lines = [f"# {name}", "", f"{len(actions)} action(s)", ""]
+    lines = [f"# {name}", "", f"{len(actions)} action(s)", "", "```"]
     depth = 0
     indent = "    "
     for a in actions:
@@ -573,6 +661,7 @@ def write_action_list(workflow, name, out_path):
         lines.append(indent * depth + describe_action(a))
         if mode in (0, 1):
             depth += 1
+    lines.append("```")
     Path(out_path).write_text("\n".join(lines) + "\n")
 
 
