@@ -184,14 +184,18 @@ def cmd_extract_all(args):
     for name, node_id in ids.items():
         label = name.replace('"', "'")
         lines.append(f'  {node_id}["{label}"]')
+    missing_ids = {}
     for caller, callees in graph["edges"].items():
         for callee in callees:
             if callee in ids:
                 lines.append(f"  {ids[caller]} --> {ids[callee]}")
             else:
-                missing_id = f"missing_{_safe_filename(callee)}"
-                lines.append(f'  {missing_id}["{callee} (missing)"]:::missing')
-                lines.append(f"  {ids[caller]} --> {missing_id}")
+                if callee not in missing_ids:
+                    missing_id = f"missing{len(missing_ids)}"
+                    missing_ids[callee] = missing_id
+                    label = callee.replace('"', "'")
+                    lines.append(f'  {missing_id}["{label} (missing)"]:::missing')
+                lines.append(f"  {ids[caller]} --> {missing_ids[callee]}")
     lines.append("  classDef missing stroke-dasharray: 5 5")
     lines.append("```")
     (out / "inventory" / "call_graph.md").write_text("\n".join(lines) + "\n")
