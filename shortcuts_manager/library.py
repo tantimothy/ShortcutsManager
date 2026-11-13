@@ -372,7 +372,7 @@ def _render_mermaid_cluster(order, edges, truly_missing):
     this particular slice (e.g. a hub's neighbor that itself calls
     something two hops away) is real and just silently dropped, not drawn
     as a fake "(missing)" node."""
-    lines = ["```mermaid", "graph TB"]
+    lines = ["```mermaid", "graph LR"]
     ids = {name: f"n{i}" for i, name in enumerate(order)}
     for name, node_id in ids.items():
         lines.append(f'  {node_id}["{name.replace(chr(34), chr(39))}"]')
@@ -394,7 +394,7 @@ def _render_mermaid_cluster(order, edges, truly_missing):
 
 
 def render_mermaid_call_graph(graph, max_cluster_size=12):
-    """One Mermaid diagram (top-down, `graph TB`) per weakly-connected
+    """One Mermaid diagram (left-to-right, `graph LR`) per weakly-connected
     cluster of callers/callees, instead of one diagram for the whole
     library -- a single graph mixing every hub (Post Pic, Share to Social
     Media, the Glympse family, the Battery/Charger/Low Power family, ...)
