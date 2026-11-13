@@ -408,7 +408,12 @@ def render_mermaid_call_graph(graph, max_cluster_size=12):
     since a hub-and-spoke cluster is still unreadable as one block even
     though it's technically one connected component.
 
-    Returns [(title, mermaid_markdown), ...], isolated_names.
+    Returns [(title, mermaid_markdown), ...], isolated_names, overview --
+    overview is [(representative_names, size), ...] for every real
+    weakly-connected component (largest first), *before* any hub
+    splitting -- the true network size, for spotting which shortcuts have
+    a sprawling call web at a glance, independent of how many diagram
+    sections that web got split into.
     """
     edges = graph["edges"]
     truly_missing = set(graph["missing"])
@@ -443,6 +448,7 @@ def render_mermaid_call_graph(graph, max_cluster_size=12):
         seen |= component
         clusters.append(component)
     clusters.sort(key=len, reverse=True)
+    overview = [(_topo_order(cluster, edges)[:5], len(cluster)) for cluster in clusters]
 
     sections = []
     for cluster in clusters:
@@ -467,7 +473,7 @@ def render_mermaid_call_graph(graph, max_cluster_size=12):
             title = ", ".join(order[:4]) + (", ..." if len(order) > 4 else "")
             sections.append((f"{title} ({len(leftover)})", _render_mermaid_cluster(order, edges, truly_missing)))
 
-    return sections, isolated
+    return sections, isolated, overview
 
 
 _ACTION_LABELS = {

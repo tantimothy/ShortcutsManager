@@ -179,12 +179,28 @@ def cmd_extract_all(args):
         n: w for n, w in workflows.items() if w is not None and w.get("WFWorkflowActions")
     }
     graph = library.build_full_call_graph(graph_workflows)
-    mermaid, isolated = library.render_mermaid_call_graph(graph)
-    lines = ["# Shortcut call graph", "", mermaid, ""]
+    sections, isolated, overview = library.render_mermaid_call_graph(graph)
+    lines = ["# Shortcut call graph", ""]
+    if overview:
+        lines.append(
+            "## Overview: every call network, largest first "
+            "(jump to its diagram below for the full picture)"
+        )
+        lines.append("")
+        for names, size in overview:
+            preview = ", ".join(names) + (", ..." if size > len(names) else "")
+            unit = "shortcut" if size == 1 else "shortcuts"
+            lines.append(f"- **{size} {unit}** -- {preview}")
+        lines.append("")
+    for title, mermaid in sections:
+        lines.append(f"## {title}")
+        lines.append("")
+        lines.append(mermaid)
+        lines.append("")
     if isolated:
         lines.append(
             f"## Standalone shortcuts ({len(isolated)})"
-            " -- call nothing and aren't called by anything, left out of the diagram above"
+            " -- call nothing and aren't called by anything, left out of the diagrams above"
         )
         lines.append("")
         for n in isolated:
