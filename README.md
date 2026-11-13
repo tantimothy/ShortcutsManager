@@ -3,6 +3,11 @@
 Python tooling for building and signing macOS/iOS Shortcuts (`.shortcut`)
 files programmatically, without going through Shortcuts.app's UI.
 
+See [`docs/architecture.md`](docs/architecture.md) for a per-module
+reference, and [`docs/full-disk-access.md`](docs/full-disk-access.md) if
+a command fails with "No Shortcuts library store found" despite the file
+clearly being there.
+
 ## How Shortcuts storage actually works
 
 There are two separate layers, confirmed by inspecting this Mac:
