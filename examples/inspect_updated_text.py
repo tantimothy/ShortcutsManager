@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shortcuts_manager import write_unsigned, sign, read_shortcut, action
 
 NAME = "Remove Diacritics"
-EXTRACTED = Path(f"<PROJECTS_DIR>/ShortcutsExtracted/unsigned/{NAME}.shortcut")
+EXTRACTED = (Path(__file__).resolve().parent.parent.parent / "ShortcutsExtracted") / f"unsigned/{NAME}.shortcut"
 EDITED_UNSIGNED = EXTRACTED.with_suffix(".inspect-updated-text.shortcut")
 SIGNED = Path(__file__).resolve().parent / "INSPECT UPDATED TEXT.shortcut"
 

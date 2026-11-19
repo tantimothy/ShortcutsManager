@@ -13,4 +13,4 @@ echo "=== dump-raw ==="
 python3 -m shortcuts_manager.cli dump-raw
 
 echo
-echo "Done. Output is in <PROJECTS_DIR>/ShortcutsExtracted"
+echo "Done. Output is in $(cd "$(dirname "$0")/../.." && pwd)/ShortcutsExtracted"

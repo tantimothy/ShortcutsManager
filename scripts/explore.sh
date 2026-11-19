@@ -4,7 +4,7 @@
 # files turned out to be empty scratch databases.
 set -uo pipefail
 
-OUT=<PROJECTS_DIR>/ShortcutsExtracted/explore
+OUT="$(cd "$(dirname "$0")/../.." && pwd)/ShortcutsExtracted/explore"
 mkdir -p "$OUT"
 
 {

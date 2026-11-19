@@ -25,7 +25,7 @@ _UNSAFE_FILENAME_CHARS = '/\\:*?"<>|'
 def _safe_filename(name):
     return "".join("-" if c in _UNSAFE_FILENAME_CHARS else c for c in name)
 
-DEFAULT_OUT = Path("<PROJECTS_DIR>/ShortcutsExtracted")
+DEFAULT_OUT = (Path(__file__).resolve().parent.parent.parent / "ShortcutsExtracted")
 
 
 def cmd_inspect(args):

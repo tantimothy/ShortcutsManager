@@ -85,10 +85,11 @@ Read-only; never writes to the store. Roughly three groups of functions:
 
 ## `shortcuts_manager/cli.py`
 
-Thin argparse wrapper over `library.py`. `DEFAULT_OUT` (currently
-`<PROJECTS_DIR>/ShortcutsExtracted`) is where every command
-writes by default; override with `--out`. See the root README's command
-examples, or `python3 -m shortcuts_manager.cli <command> --help`.
+Thin argparse wrapper over `library.py`. `DEFAULT_OUT` is the sibling
+`ShortcutsExtracted` directory (next to this repo, computed from
+`__file__` -- no hardcoded path) and is where every command writes by
+default; override with `--out`. See the root README's command examples,
+or `python3 -m shortcuts_manager.cli <command> --help`.
 
 `extract-all` is the one most worth understanding end-to-end: for every
 shortcut it writes `unsigned/<name>.shortcut`, signs it to

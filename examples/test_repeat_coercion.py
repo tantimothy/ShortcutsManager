@@ -34,7 +34,7 @@ LINES = "Line1\nLine2\nLine3"
 # scratch -- a from-scratch workflow dict seems to have its own reliability
 # issues showing freshly-introduced variables via Show Result, independent
 # of anything to do with coercion, so only WFWorkflowActions is replaced.
-TEMPLATE = Path("<PROJECTS_DIR>/ShortcutsExtracted/unsigned/Dedup List.shortcut")
+TEMPLATE = (Path(__file__).resolve().parent.parent.parent / "ShortcutsExtracted") / "unsigned/Dedup List.shortcut"
 
 
 def build(name, with_coercion):

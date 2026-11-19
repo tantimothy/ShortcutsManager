@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shortcuts_manager import write_unsigned, sign, read_shortcut, action
 
 NAME = "Post Article"
-EXTRACTED = Path(f"<PROJECTS_DIR>/ShortcutsExtracted/unsigned/{NAME}.shortcut")
+EXTRACTED = (Path(__file__).resolve().parent.parent.parent / "ShortcutsExtracted") / f"unsigned/{NAME}.shortcut"
 EDITED_UNSIGNED = EXTRACTED.with_suffix(".diagnostic-v4.shortcut")
 SIGNED = Path(__file__).resolve().parent / f"{NAME} (diagnostic v4).shortcut"
 
