@@ -538,6 +538,16 @@ def _resolve_text(value):
         return attachment.get("Type", "?")
 
     inner = value.get("Value", value)
+    if isinstance(inner, dict) and "WFDictionaryFieldValueItems" in inner:
+        entries = inner["WFDictionaryFieldValueItems"] or []
+        pairs = [f"{_resolve_text(it.get('WFKey'))}: {_resolve_text(it.get('WFValue'))}" for it in entries]
+        return "{" + ", ".join(pairs) + "}"
+    if isinstance(inner, dict) and "Value" in inner and "Type" not in inner:
+        # Another layer of wrapping (e.g. a dictionary/form field's value
+        # carries its own WFTokenAttachmentParameterState-wrapped token
+        # rather than the plain WFTextTokenString/Attachment shape) --
+        # unwrap it the same way instead of giving up on it.
+        return _resolve_text(inner)
     if isinstance(inner, dict) and "string" in inner:
         s = inner["string"]
         attachments = inner.get("attachmentsByRange") or {}
@@ -564,15 +574,68 @@ def _resolve_text(value):
 _REPEAT_IDENTIFIERS = {"repeat.count", "repeat.each"}
 
 
-def describe_action(action):
+_BRANCHING_IDENTIFIERS = {"conditional", "choosefrommenu"}
+
+
+def _implicit_input_text(actions, prev_index):
+    """Label for an input the action at (conceptually) `prev_index + 1` left
+    unwired. Shortcuts.app doesn't leave this blank at runtime -- it
+    implicitly pipes in the shortcut's own input (if there's no preceding
+    action) or the immediately preceding action's result. Rendering
+    nothing here (the old behavior) reads as a wiring gap; render what
+    actually feeds in.
+
+    Most control-flow markers don't themselves produce a value to pipe
+    forward, so walk back past them -- with two exceptions:
+    - Repeat with Each's own start marker: its implicit value genuinely is
+      the loop's `Repeat Item`.
+    - A branch marker (Otherwise/Case 'X') or an End If/End Choose from
+      Menu: walking back one step from these lands on a *different*,
+      mutually-exclusive branch's last action (the one physically
+      preceding it in the flat array) -- not "whatever ran before this
+      branch", which is the wrong predecessor, and not necessarily "what
+      actually ran" either, since only one branch out of several executes.
+      Rather than confidently naming the wrong branch, say plainly that it
+      depends on which branch ran.
+
+    `actions` and `prev_index` must refer to the same flat
+    WFWorkflowActions list/index this call chain started from, so a
+    chain of several consecutive unwired actions resolves correctly
+    instead of each link re-deriving its own predecessor from scratch."""
+    if actions is None or prev_index is None:
+        return "{ExtensionInput}"
+    idx = prev_index
+    while idx >= 0:
+        prev = actions[idx]
+        prev_params = prev.get("WFWorkflowActionParameters") or {}
+        prev_short = prev.get("WFWorkflowActionIdentifier", "").replace("is.workflow.actions.", "")
+        prev_mode = prev_params.get("WFControlFlowMode")
+        if prev_short == "repeat.each" and prev_mode == 0:
+            return "{Repeat Item}"
+        if prev_short in _BRANCHING_IDENTIFIERS and prev_mode in (1, 2):
+            return "{implicit input -- depends which branch ran, can't resolve statically}"
+        if prev_short in _REPEAT_IDENTIFIERS or (prev_short in _BRANCHING_IDENTIFIERS and prev_mode == 0):
+            idx -= 1
+            continue
+        return f"{{implicit input from previous action: {describe_action(prev, actions, idx)}}}"
+    return "{ExtensionInput}"
+
+
+def describe_action(action, actions=None, index=None):
     """One human-readable pseudocode line for a single WFWorkflowActions
     entry, with no leading index -- the caller handles indentation for
-    control-flow blocks (If/Otherwise/End If, Repeat/End Repeat)."""
+    control-flow blocks (If/Otherwise/End If, Repeat/End Repeat).
+
+    `actions`/`index` are the flat WFWorkflowActions list this action came
+    from and its index in it (both None if not available) -- used only to
+    describe an input this action left unwired; see
+    `_implicit_input_text`."""
     ident = action.get("WFWorkflowActionIdentifier", "?")
     params = action.get("WFWorkflowActionParameters") or {}
     short = ident.replace("is.workflow.actions.", "")
     label = _ACTION_LABELS.get(short, short.replace(".", " ").replace("_", " ").title())
     mode = params.get("WFControlFlowMode")
+    prev_index = (index - 1) if index is not None else None
 
     if short == "conditional":
         if mode == 0:
@@ -588,7 +651,9 @@ def describe_action(action):
                 times = params.get("WFRepeatCount")
                 times_text = _resolve_text(times) if isinstance(times, dict) else times
                 return f"Repeat {times_text} times:"
-            return f"Repeat with each item in {_resolve_text(params.get('WFInput'))}:"
+            wf_input = params.get("WFInput")
+            input_text = _resolve_text(wf_input) if wf_input is not None else _implicit_input_text(actions, prev_index)
+            return f"Repeat with each item in {input_text}:"
         return "End Repeat"
     if short == "choosefrommenu":
         if mode == 0:
@@ -599,7 +664,9 @@ def describe_action(action):
             return f"Case {params.get('WFMenuItemTitle')!r}:"
         return "End Choose from Menu"
     if short == "setvariable":
-        return f"Set Variable '{params.get('WFVariableName')}' = {_resolve_text(params.get('WFInput'))}"
+        wf_input = params.get("WFInput")
+        input_text = _resolve_text(wf_input) if wf_input is not None else _implicit_input_text(actions, prev_index)
+        return f"Set Variable '{params.get('WFVariableName')}' = {input_text}"
     if short == "getvariable":
         var = (params.get("WFVariable") or {}).get("Value", {})
         return f"Get Variable '{var.get('VariableName', '?')}'"
@@ -618,6 +685,10 @@ def describe_action(action):
         return f"Show Result: {_resolve_text(params.get('Text'))}"
     if short == "comment":
         return f"Comment: {_resolve_text(params.get('WFCommentActionText'))}"
+    if short == "dictionary":
+        custom_name = params.get("CustomOutputName")
+        suffix = f" (as '{custom_name}')" if custom_name else ""
+        return f"Dictionary{suffix}: {_resolve_text(params.get('WFItems'))}"
     if short == "choosefromlist":
         prompt = params.get("WFChooseFromListActionPrompt")
         if prompt:
@@ -659,12 +730,12 @@ def write_action_list(workflow, name, out_path):
     lines = [f"# {name}", "", f"{len(actions)} action(s)", "", "```"]
     depth = 0
     indent = "    "
-    for a in actions:
+    for i, a in enumerate(actions):
         params = a.get("WFWorkflowActionParameters") or {}
         mode = params.get("WFControlFlowMode")
         if mode in (1, 2):
             depth = max(depth - 1, 0)
-        lines.append(indent * depth + describe_action(a))
+        lines.append(indent * depth + describe_action(a, actions, i))
         if mode in (0, 1):
             depth += 1
     lines.append("```")

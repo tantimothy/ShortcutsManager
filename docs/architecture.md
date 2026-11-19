@@ -77,11 +77,59 @@ Read-only; never writes to the store. Roughly three groups of functions:
   cluster bigger than `max_cluster_size`), plus a size-ranked overview
   and the isolated (calls nothing, called by nothing) list. Returns
   `(sections, isolated, overview)`.
-- `describe_action(action)` -- one pseudocode line for a single action
-  (If/Otherwise/End If, Repeat/End Repeat, etc. -- the caller handles
-  indentation). `write_action_list(workflow, name, out_path)` renders a
-  whole shortcut's actions this way into a fenced-code-block Markdown
-  file.
+- `describe_action(action, actions=None, index=None)` -- one pseudocode
+  line for a single action (If/Otherwise/End If, Repeat/End Repeat, etc. --
+  the caller handles indentation). `write_action_list(workflow, name,
+  out_path)` renders a whole shortcut's actions this way into a
+  fenced-code-block Markdown file, passing the flat `WFWorkflowActions`
+  list and each action's own index in it.
+
+  `actions`/`index` exist for one reason: when a `Set Variable` or `Repeat
+  with Each` action leaves its input unwired in the Shortcuts app (no
+  `WFInput` key at all, not just an unresolvable one), Shortcuts.app
+  doesn't error or leave it empty at runtime -- it implicitly uses the
+  shortcut's own input (if there's no preceding action), the enclosing
+  loop's `Repeat Item` (if the unwired action is the first one right after
+  a `Repeat with Each` starts), or otherwise the immediately preceding
+  action's result. The renderer used to just show nothing for these
+  (`Set Variable 'X' = ` with nothing after the `=`), which reads as a bug
+  in the shortcut rather than what it actually is: normal, valid wiring
+  the renderer wasn't following. `_implicit_input_text` (in
+  `library.py`) now walks the action list backwards past markers that
+  don't themselves produce a value (If/Repeat starts, `End Repeat`) to
+  find what actually feeds in, rendering `{ExtensionInput}`,
+  `{Repeat Item}`, or `` {implicit input from previous action: <that
+  action's own pseudocode line>} `` -- recursively, so a run of several
+  consecutive unwired actions resolves correctly instead of each one only
+  looking one step back. One case it deliberately refuses to guess:
+  walking back from the first unwired action in an `Otherwise`/`Case`
+  branch, or right after `End If`/`End Choose from Menu`, would land on a
+  *different*, mutually-exclusive sibling branch's last action -- since
+  only one branch actually runs, it says plainly `{implicit input --
+  depends which branch ran, can't resolve statically}` instead of naming
+  a branch that's often wrong.
+
+  This fixed 26 shortcuts' pseudocode across the library that were
+  previously showing misleading blanks (see
+  [`ShortcutsExtracted/docs/shortcuts/glympse-location-sharing.md`](../../ShortcutsExtracted/docs/shortcuts/glympse-location-sharing.md#glympse-phone-number-to-list)
+  for the case that surfaced it). It's scoped to just `setvariable` and
+  `repeat.each`'s `WFInput` -- other action types that can also be left
+  unwired (e.g. `Text Split`'s `text` key) still render as a bare label
+  with no indication of implicit input; extend `describe_action` the same
+  way if those turn out to matter.
+
+  Separately, `_resolve_text` now understands a literal
+  `WFDictionaryFieldValue` (a Dictionary action's `WFItems`, or any other
+  action's dictionary-shaped parameter, like Download URL's
+  `WFFormValues`) and renders it key-by-key -- `Dictionary (WFItems='{?}')`
+  used to be a dead end because nothing resolved that shape at all. It
+  also now unwraps one extra layer of token wrapping
+  (`WFTokenAttachmentParameterState`) some dictionary *values* carry that
+  plain `WFInput`-style references don't. This fixed 4 more shortcuts'
+  pseudocode. A handful of other, unrelated `{?}` spots remain (Phone
+  Number literals, Filter actions' predicate expressions, `Seek`'s time
+  interval) -- different serialization shapes `_resolve_text` doesn't
+  cover yet.
 
 ## `shortcuts_manager/cli.py`
 
