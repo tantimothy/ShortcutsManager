@@ -218,3 +218,34 @@ join, no AppleScript involved), and writes `inventory/automations.json`
 and `inventory/automations.md` -- one entry per Personal Automation, its
 trigger condition, and the shortcut it runs. See `extract_automations()`
 in `library.py`.
+
+## `scripts/tui.sh`
+
+A numbered-menu wrapper over every `cli.py` subcommand, not a second
+implementation of any of them: each menu choice runs the same
+`python3 -m shortcuts_manager.cli <command> ...` this project's other
+`scripts/` wrappers run directly, so output, error messages and exit
+codes are identical to running the command yourself -- this file only
+owns the menu loop and the interactive prompts (`--name`, `--out`). The
+one bit of actual behavior it adds: leaving the shortcut-name prompt
+blank runs `list-shortcuts` first, then re-prompts, so you don't have to
+already know the exact name.
+
+Originally written in Python (`shortcuts_manager/tui.py`) before being
+rewritten in bash on request -- two things worth knowing if you touch
+this again:
+- No `set -u`/`set -e`. `-u` (nounset) is actively harmful here: macOS's
+  stock bash is 3.2 (Apple hasn't updated it, for licensing reasons, and
+  it's what `#!/bin/bash` resolves to unless you've installed and put a
+  newer one first on `PATH`), and under `-u`, 3.2 treats expanding an
+  *empty* array (`"${OUT_ARGS[@]}"`, when `--out` is left blank) as an
+  unbound-variable error -- fixed in bash 4.4+, but not available here.
+  `-e` is skipped for the same reason the Python version didn't use a
+  bare `sys.exit` on every error: one subcommand failing shouldn't kill
+  the whole menu.
+- Every `read` that can see EOF (piped/non-interactive stdin, or Ctrl-D)
+  checks its own exit status and falls back to returning to (or exiting)
+  the menu rather than looping forever or erroring -- the Python version
+  hit exactly this as a real bug during testing (an unguarded `input()`
+  crashed with a raw traceback on EOF), so it was built in from the start
+  here instead of being left to rediscover.

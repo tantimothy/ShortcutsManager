@@ -151,6 +151,23 @@ Writes `inventory/automations.json` and `inventory/automations.md`. This
 needs **Full Disk Access**, like `extract-all`/`dump-raw` -- not the
 Automation permission `folders` needs.
 
+## Interactive menu
+
+All of the above (`inspect`, `dump-raw`, `list-shortcuts`, `extract-one`,
+`map-calls`, `extract-all`, `folders`, `automations`) in one numbered
+menu, if you'd rather not remember command names and flags:
+
+```
+scripts/tui.sh
+```
+
+Not a separate implementation -- each menu choice just runs the same
+`python3 -m shortcuts_manager.cli <command> ...` this project's other
+`scripts/` wrappers run directly, so behavior, including error messages,
+is identical to running the command yourself. `extract-one`/`map-calls`
+let you leave the shortcut name blank to list every shortcut first, then
+re-prompt.
+
 ## Editing an existing shortcut
 
 Confirmed by joining the real tables: `ZSHORTCUT` (name, metadata, and
