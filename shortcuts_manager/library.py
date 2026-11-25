@@ -793,7 +793,7 @@ def describe_action(action, actions=None, index=None):
     return f"{label}{suffix}"
 
 
-def write_action_list(workflow, name, out_path):
+def write_action_list(workflow, name, out_path, folder=None, automation_trigger=None):
     """Human-readable, indented pseudocode listing of every action in
     `workflow` -- If/Otherwise/End If and Repeat/End Repeat blocks are
     nested, matching the shortcut's actual control flow.
@@ -802,9 +802,21 @@ def write_action_list(workflow, name, out_path):
     blank line between them) get collapsed into one run-on paragraph by
     any renderer, silently dropping both the line breaks and the
     indentation -- a code fence is what keeps this readable as pseudocode.
-    """
+
+    `folder` (from export_folder_hierarchy()) and `automation_trigger`
+    (a description string from extract_automations(), for a shortcut
+    that's also a Personal Automation) are optional context lines from
+    two completely different data sources than this function's own --
+    see cmd_extract_all(), which is what actually joins them in. Left out
+    of the header entirely when None/not provided, rather than printing
+    a bare "(none)", since most shortcuts have neither."""
     actions = workflow.get("WFWorkflowActions") or []
-    lines = [f"# {name}", "", f"{len(actions)} action(s)", "", "```"]
+    lines = [f"# {name}", "", f"{len(actions)} action(s)"]
+    if folder:
+        lines.append(f"Folder: {folder}")
+    if automation_trigger:
+        lines.append(f"Automation trigger: {automation_trigger}")
+    lines += ["", "```"]
     depth = 0
     indent = "    "
     for i, a in enumerate(actions):

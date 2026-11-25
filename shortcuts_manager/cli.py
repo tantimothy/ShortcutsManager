@@ -159,6 +159,22 @@ def cmd_extract_all(args):
     for d in (unsigned_dir, signed_dir, actions_dir):
         d.mkdir(parents=True, exist_ok=True)
 
+    # Folder and Personal Automation context for each shortcut's action-list
+    # header -- two entirely different data sources from the SQLite store
+    # this command otherwise relies on (see write_action_list()). Best-effort:
+    # folders needs the separate Automation permission (not Full Disk Access),
+    # so don't let it missing stop the extraction this command exists for.
+    try:
+        folder_map = library.export_folder_hierarchy()["shortcuts"]
+    except Exception as e:
+        print(f"Folder lookup skipped ({e}); action lists won't show folders.", file=sys.stderr)
+        folder_map = {}
+    try:
+        trigger_map = {a["shortcut_name"]: a["description"] for a in library.extract_automations()}
+    except Exception as e:
+        print(f"Automation lookup skipped ({e}).", file=sys.stderr)
+        trigger_map = {}
+
     failed = []
     empty = []
     sign_failed = []
@@ -173,7 +189,10 @@ def cmd_extract_all(args):
         signed_path = signed_dir / f"{safe}.shortcut"
         old_bytes = unsigned_path.read_bytes() if unsigned_path.exists() else None
         workflow.write_unsigned(wf, unsigned_path)
-        library.write_action_list(wf, name, actions_dir / f"{safe}.md")
+        library.write_action_list(
+            wf, name, actions_dir / f"{safe}.md",
+            folder=folder_map.get(name), automation_trigger=trigger_map.get(name),
+        )
         # The DB's cached ZACTIONCOUNT is unreliable (confirmed stale on
         # live shortcuts) -- only the actually-decoded action list counts.
         if len(wf.get("WFWorkflowActions") or []) == 0:

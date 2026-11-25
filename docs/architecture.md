@@ -194,6 +194,17 @@ shortcut's `signed/` file can lag behind a previous extraction's nonce
 until it actually changes; that's fine, since the binary still
 re-imports correctly either way.
 
+Each `inventory/actions/<name>.md` header also gets a `Folder:` and/or
+`Automation trigger:` line when applicable, by calling
+`export_folder_hierarchy()`/`extract_automations()` once up front and
+passing the per-shortcut result into `write_action_list()` -- joining in
+two data sources this command otherwise has nothing to do with. The
+folder lookup is best-effort (it needs the Automation permission, not
+Full Disk Access; a failure there is reported but doesn't stop the rest
+of the extraction) and gets re-fetched fresh on every run, so it's always
+current -- unlike `inventory/folders.md`/`automations.md` themselves,
+which only update when their own commands are run.
+
 `folders` is the odd one out: it needs the Automation permission (control
 Shortcuts.app), not Full Disk Access, and writes `inventory/folders.json`
 (raw `{"folders": [...], "shortcuts": {name: folder_or_null}}`) plus
