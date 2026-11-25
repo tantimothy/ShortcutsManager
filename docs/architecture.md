@@ -153,6 +153,23 @@ Read-only; never writes to the store. Roughly three groups of functions:
   the abandoned reverse-engineering path, kept as a record of what was
   tried.
 
+**Personal Automations (back to the SQLite store, a different table)**
+- `extract_automations(db_path=None)` -- each Automation is a
+  `ZUNIFIEDTRIGGER` row (the trigger condition) joined to the `ZSHORTCUT`
+  it runs. Unlike folders, there's no AppleScript shortcut here --
+  `sdef /System/Applications/Shortcuts.app` has no "automation" class at
+  all, only `shortcut` and `folder` -- so this reads straight from the
+  store, same as `extract_workflow()`. Unlike folders too,
+  `WFTriggerSerializedParameters` decodes as a **plain plist**, no
+  archiver or CRDT wrapping -- `_decode_value()` already handles it, no
+  reverse engineering needed. `describe_trigger(identifier, parameters)`
+  renders a human summary for the trigger types actually seen in this
+  library (`WFBatteryLevelTrigger`, `WFPlugInTrigger`,
+  `WFAirplaneModeTrigger`, `WFLeaveLocationTrigger`) and falls back to raw
+  JSON for anything else, same spirit as `describe_action()`'s generic
+  fallback. `WFArriveLocationTrigger`'s shape is a guess by symmetry with
+  the leave-location one -- confirm it if one ever actually shows up.
+
 ## `shortcuts_manager/cli.py`
 
 Thin argparse wrapper over `library.py`. `DEFAULT_OUT` is the sibling
@@ -184,3 +201,9 @@ Shortcuts.app), not Full Disk Access, and writes `inventory/folders.json`
 and an "(not in any folder)" section). See `export_folder_hierarchy()` in
 `library.py` for why this one data source is completely different from
 everything else this CLI does.
+
+`automations` is back to needing Full Disk Access (it's a plain SQLite
+join, no AppleScript involved), and writes `inventory/automations.json`
+and `inventory/automations.md` -- one entry per Personal Automation, its
+trigger condition, and the shortcut it runs. See `extract_automations()`
+in `library.py`.

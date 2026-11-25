@@ -134,6 +134,23 @@ prompt) -- not Full Disk Access. Before that permission is granted, even
 the simplest query hangs indefinitely rather than failing, so if this
 seems stuck, check for a permission dialog.
 
+## Personal Automations (read-only)
+
+A different data source again: each Automation is a `ZUNIFIEDTRIGGER` row
+(the trigger condition -- battery level, charger connect/disconnect,
+airplane mode, leave/arrive location, etc.) joined to the `ZSHORTCUT` it
+runs. No AppleScript shortcut here (Shortcuts.app's scripting dictionary
+has no "automation" class at all), but the trigger data itself is a
+**plain plist** -- no archiver or CRDT wrapping, unlike folders.
+
+```
+python3 -m shortcuts_manager.cli automations   # or scripts/export_automations.sh
+```
+
+Writes `inventory/automations.json` and `inventory/automations.md`. This
+needs **Full Disk Access**, like `extract-all`/`dump-raw` -- not the
+Automation permission `folders` needs.
+
 ## Editing an existing shortcut
 
 Confirmed by joining the real tables: `ZSHORTCUT` (name, metadata, and

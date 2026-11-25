@@ -257,6 +257,82 @@ def extract_all_workflows(db_path=None):
     return workflows
 
 
+_TRIGGER_DESCRIPTIONS = {
+    "WFPlugInTrigger": lambda p: f"Charger {p.get('WFConnectionType', '?')}ed",
+    "WFBatteryLevelTrigger": lambda p: (
+        f"Battery level {p.get('WFBatteryLevelComparison', '?').replace('_', ' ')} "
+        f"{p.get('WFBatteryLevel', '?')}%"
+    ),
+    "WFAirplaneModeTrigger": lambda p: f"Airplane Mode turned {p.get('WFAirplaneModeType', '?')}",
+    "WFLeaveLocationTrigger": lambda p: (
+        f"Leaving {(p.get('WFLeaveLocation') or {}).get('locationName', '?')}"
+    ),
+    "WFArriveLocationTrigger": lambda p: (
+        f"Arriving at {(p.get('WFArriveLocation') or {}).get('locationName', '?')}"
+    ),
+}
+
+
+def describe_trigger(identifier, parameters):
+    """Best-effort human-readable summary of one automation trigger.
+    `WFArriveLocationTrigger`'s shape is a guess by symmetry with
+    `WFLeaveLocationTrigger` (the only location trigger type actually seen
+    in this library's data is "leave") -- confirm it if one ever shows up.
+    Falls back to raw identifier+parameters for any other type, same as
+    describe_action()'s generic fallback, so nothing is silently dropped."""
+    fn = _TRIGGER_DESCRIPTIONS.get(identifier)
+    if fn:
+        try:
+            return fn(parameters or {})
+        except Exception:
+            pass
+    return f"{identifier} {parameters!r}"
+
+
+def extract_automations(db_path=None):
+    """Personal Automations: each is a `ZUNIFIEDTRIGGER` row (the trigger
+    condition) joined to the `ZSHORTCUT` it runs when that condition fires.
+
+    Not reachable via Shortcuts.app's own AppleScript dictionary -- `sdef`
+    shows no "automation" class there, only `shortcut` and `folder` (see
+    `export_folder_hierarchy()`) -- so this reads straight from the SQLite
+    store instead, same as everything else in this module except folders.
+    Unlike the folder hierarchy, the trigger condition itself
+    (`WFTriggerSerializedParameters`) decodes as a plain plist with no
+    archiver or CRDT wrapping -- `_decode_value()` already handles it.
+
+    Returns a list of {"shortcut_name", "trigger_identifier", "trigger_uuid",
+    "parameters", "description"}, ordered by shortcut name."""
+    db_path = db_path or find_main_store()
+    if db_path is None:
+        raise FileNotFoundError("No Shortcuts library store found.")
+    con = _connect(db_path)
+    try:
+        rows = con.execute(
+            "SELECT t.ZUUID, t.ZDATA, s.ZNAME "
+            "FROM ZUNIFIEDTRIGGER t JOIN ZSHORTCUT s ON t.ZSHORTCUT = s.Z_PK "
+            "WHERE s.ZTOMBSTONED = 0 AND s.ZCONFLICTOF IS NULL "
+            "ORDER BY s.ZNAME"
+        ).fetchall()
+        out = []
+        for uuid, data, name in rows:
+            decoded = _decode_value(data) if isinstance(data, bytes) else (data or {})
+            identifier = decoded.get("WFTriggerIdentifier", "?")
+            params = decoded.get("WFTriggerSerializedParameters") or {}
+            out.append(
+                {
+                    "shortcut_name": name,
+                    "trigger_identifier": identifier,
+                    "trigger_uuid": uuid,
+                    "parameters": params,
+                    "description": describe_trigger(identifier, params),
+                }
+            )
+        return out
+    finally:
+        con.close()
+
+
 RUN_WORKFLOW_IDENTIFIER = "is.workflow.actions.runworkflow"
 
 

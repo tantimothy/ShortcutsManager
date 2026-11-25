@@ -7,6 +7,7 @@ Usage:
     python3 -m shortcuts_manager.cli extract-one --name NAME [--out DIR]
     python3 -m shortcuts_manager.cli map-calls --name NAME [--out DIR]
     python3 -m shortcuts_manager.cli folders [--out DIR]
+    python3 -m shortcuts_manager.cli automations [--out DIR]
 
 Requires Full Disk Access for whatever process runs python3 here -- the
 Shortcuts Group Containers are TCC-protected. Read-only: see library.py.
@@ -311,6 +312,33 @@ def cmd_folders(args):
     return 0
 
 
+def cmd_automations(args):
+    try:
+        automations = library.extract_automations()
+    except FileNotFoundError as e:
+        print(e, file=sys.stderr)
+        return 1
+
+    out = Path(args.out)
+    inventory_dir = out / "inventory"
+    inventory_dir.mkdir(parents=True, exist_ok=True)
+    (inventory_dir / "automations.json").write_text(
+        json.dumps(automations, indent=2, default=library._json_default)
+    )
+
+    lines = ["# Personal Automations", "", f"{len(automations)} automation(s).", ""]
+    for a in automations:
+        lines.append(f"## {a['shortcut_name']}")
+        lines.append("")
+        lines.append(f"- Trigger: {a['description']} (`{a['trigger_identifier']}`)")
+        lines.append("")
+    (inventory_dir / "automations.md").write_text("\n".join(lines))
+
+    print(f"{len(automations)} automation(s).")
+    print(f"Written to {inventory_dir / 'automations.json'} and {inventory_dir / 'automations.md'}")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="shortcuts_manager")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -356,6 +384,13 @@ def main(argv=None):
     )
     p_folders.add_argument("--out", default=str(DEFAULT_OUT))
     p_folders.set_defaults(func=cmd_folders)
+
+    p_automations = sub.add_parser(
+        "automations",
+        help="Export Personal Automations (trigger condition + the shortcut each one runs).",
+    )
+    p_automations.add_argument("--out", default=str(DEFAULT_OUT))
+    p_automations.set_defaults(func=cmd_automations)
 
     args = parser.parse_args(argv)
     return args.func(args)
