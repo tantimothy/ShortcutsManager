@@ -131,6 +131,28 @@ Read-only; never writes to the store. Roughly three groups of functions:
   interval) -- different serialization shapes `_resolve_text` doesn't
   cover yet.
 
+**Folder hierarchy (a different data source entirely)**
+- `export_folder_hierarchy(timeout=120)` -- folder/shortcut organization,
+  via Shortcuts.app's own AppleScript dictionary (`Shortcuts Events`), not
+  the SQLite store. This isn't a stylistic choice: folder data genuinely
+  isn't reachable through Core Data. `ZCOLLECTION` (the obvious
+  Core-Data-naming candidate) holds only Apple's own internal
+  `"QuickActions"` row, confirmed on two separate fresh dumps days apart --
+  not a staleness issue. It's actually stored in `ZLIBRARY.ZDATA`, as a
+  custom `"crdt"`-magic-prefixed, protobuf-shaped document with its own
+  string-interning pool (every real folder name is in there, confirmed) --
+  undocumented anywhere publicly, and reverse-engineering its exact tree
+  topology to recover per-folder membership turned out to be unnecessary:
+  `sdef /System/Applications/Shortcuts.app` shows every `shortcut` has a
+  `folder` property, which this function queries directly instead. Needs
+  the Automation permission for whatever process runs this to control
+  Shortcuts.app (a one-time system prompt) rather than Full Disk Access --
+  and before that permission is granted, even the simplest possible call
+  (`count shortcuts`) hangs indefinitely instead of failing, which is why
+  this has an explicit `timeout`. See `examples/find_folder_storage.py` for
+  the abandoned reverse-engineering path, kept as a record of what was
+  tried.
+
 ## `shortcuts_manager/cli.py`
 
 Thin argparse wrapper over `library.py`. `DEFAULT_OUT` is the sibling
@@ -154,3 +176,11 @@ even ones that didn't change at all -- pure git noise. This means a
 shortcut's `signed/` file can lag behind a previous extraction's nonce
 until it actually changes; that's fine, since the binary still
 re-imports correctly either way.
+
+`folders` is the odd one out: it needs the Automation permission (control
+Shortcuts.app), not Full Disk Access, and writes `inventory/folders.json`
+(raw `{"folders": [...], "shortcuts": {name: folder_or_null}}`) plus
+`inventory/folders.md` (grouped, human-readable, including empty folders
+and an "(not in any folder)" section). See `export_folder_hierarchy()` in
+`library.py` for why this one data source is completely different from
+everything else this CLI does.

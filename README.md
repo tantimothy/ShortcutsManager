@@ -111,6 +111,29 @@ around that:
   (e.g. the Claude desktop app): grant Full Disk Access to **that app**
   instead.
 
+## Folder hierarchy (read-only)
+
+Folder/group organization (which shortcuts you've put in which folders)
+isn't stored in the Core Data store at all -- confirmed by inspection,
+`ZCOLLECTION` (the obvious candidate) holds only Apple's own internal
+`"QuickActions"` row. It's actually encoded in `ZLIBRARY.ZDATA` as an
+undocumented, custom CRDT/protobuf-shaped document. Rather than reverse-
+engineer that format, `export_folder_hierarchy()` in
+[`shortcuts_manager/library.py`](shortcuts_manager/library.py) gets the
+same information directly from Shortcuts.app's own AppleScript
+dictionary, where every shortcut has a `folder` property.
+
+```
+python3 -m shortcuts_manager.cli folders   # or scripts/export_folders.sh
+```
+
+Writes `inventory/folders.json` and a grouped, human-readable
+`inventory/folders.md`. This needs the **Automation** permission for
+whichever process runs it to control Shortcuts.app (a one-time system
+prompt) -- not Full Disk Access. Before that permission is granted, even
+the simplest query hangs indefinitely rather than failing, so if this
+seems stuck, check for a permission dialog.
+
 ## Editing an existing shortcut
 
 Confirmed by joining the real tables: `ZSHORTCUT` (name, metadata, and

@@ -6,9 +6,15 @@ Usage:
     python3 -m shortcuts_manager.cli list-shortcuts
     python3 -m shortcuts_manager.cli extract-one --name NAME [--out DIR]
     python3 -m shortcuts_manager.cli map-calls --name NAME [--out DIR]
+    python3 -m shortcuts_manager.cli folders [--out DIR]
 
 Requires Full Disk Access for whatever process runs python3 here -- the
 Shortcuts Group Containers are TCC-protected. Read-only: see library.py.
+
+`folders` is the one exception: it doesn't touch the SQLite store at all
+(folder/group data isn't reachable there), so it needs the Automation
+permission for this process to control Shortcuts.app instead of Full Disk
+Access -- see `export_folder_hierarchy()` in library.py.
 """
 
 import argparse
@@ -246,6 +252,65 @@ def cmd_extract_all(args):
     return 0
 
 
+def cmd_folders(args):
+    try:
+        data = library.export_folder_hierarchy()
+    except FileNotFoundError:
+        print("osascript not found (this needs to run on macOS).", file=sys.stderr)
+        return 1
+    except subprocess.TimeoutExpired:
+        print(
+            "Shortcuts Events didn't respond in time. If this is the first run, "
+            "macOS likely needs you to approve an Automation permission prompt "
+            "for this process to control Shortcuts.app -- check for a dialog, "
+            "approve it, then run this again.",
+            file=sys.stderr,
+        )
+        return 1
+    except subprocess.CalledProcessError as e:
+        print(f"osascript failed: {e.stderr.strip()}", file=sys.stderr)
+        return 1
+
+    out = Path(args.out)
+    inventory_dir = out / "inventory"
+    inventory_dir.mkdir(parents=True, exist_ok=True)
+    (inventory_dir / "folders.json").write_text(json.dumps(data, indent=2))
+
+    by_folder = {}
+    for shortcut, folder in data["shortcuts"].items():
+        by_folder.setdefault(folder, []).append(shortcut)
+
+    lines = [
+        "# Folder hierarchy",
+        "",
+        f"{len(data['folders'])} folder(s), {len(data['shortcuts'])} shortcut(s).",
+        "",
+        "Extracted via Shortcuts.app's own AppleScript dictionary, not the "
+        "SQLite store -- see `export_folder_hierarchy()` in `library.py` for "
+        "why (folder data isn't reachable through Core Data at all).",
+        "",
+    ]
+    for folder in sorted(f["name"] for f in data["folders"]):
+        members = sorted(by_folder.get(folder, []))
+        lines.append(f"## {folder} ({len(members)})")
+        lines.append("")
+        for m in members:
+            lines.append(f"- {m}")
+        lines.append("")
+    unfiled = sorted(by_folder.get(None, []))
+    if unfiled:
+        lines.append(f"## (not in any folder) ({len(unfiled)})")
+        lines.append("")
+        for m in unfiled:
+            lines.append(f"- {m}")
+        lines.append("")
+    (inventory_dir / "folders.md").write_text("\n".join(lines))
+
+    print(f"{len(data['folders'])} folder(s), {len(data['shortcuts'])} shortcut(s).")
+    print(f"Written to {inventory_dir / 'folders.json'} and {inventory_dir / 'folders.md'}")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="shortcuts_manager")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -283,6 +348,14 @@ def main(argv=None):
     )
     p_all.add_argument("--out", default=str(DEFAULT_OUT))
     p_all.set_defaults(func=cmd_extract_all)
+
+    p_folders = sub.add_parser(
+        "folders",
+        help="Export folder membership via Shortcuts.app's own AppleScript dictionary "
+        "(needs the Automation permission, not Full Disk Access).",
+    )
+    p_folders.add_argument("--out", default=str(DEFAULT_OUT))
+    p_folders.set_defaults(func=cmd_folders)
 
     args = parser.parse_args(argv)
     return args.func(args)

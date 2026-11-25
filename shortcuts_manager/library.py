@@ -14,6 +14,7 @@ import base64
 import json
 import plistlib
 import sqlite3
+import subprocess
 from collections import deque
 from datetime import datetime, date
 from pathlib import Path
@@ -750,3 +751,74 @@ def _json_default(obj):
     if isinstance(obj, bytes):
         return base64.b64encode(obj).decode("ascii")
     return str(obj)
+
+
+_FOLDER_APPLESCRIPT = """
+tell application "Shortcuts Events"
+    set folderLines to ""
+    repeat with f in folders
+        set folderLines to folderLines & (name of f) & "\t" & (id of f) & linefeed
+    end repeat
+    set shortcutLines to ""
+    repeat with s in shortcuts
+        try
+            set fname to name of folder of s
+        on error
+            set fname to ""
+        end try
+        set shortcutLines to shortcutLines & (name of s) & "\t" & fname & linefeed
+    end repeat
+    return folderLines & "===SPLIT===" & shortcutLines
+end tell
+"""
+
+
+def export_folder_hierarchy(timeout=120):
+    """Folder membership via Shortcuts.app's own AppleScript dictionary
+    ("Shortcuts Events") -- not from the SQLite store at all.
+
+    Folder/shortcut organization isn't reachable through anything
+    find_stores()/dump_raw() exposes: ZCOLLECTION (the obvious Core-Data-
+    naming candidate) holds only Apple's own internal "QuickActions" row,
+    confirmed empty of user folders on two separate fresh dumps, and no
+    other table references one. It turns out to actually live in
+    ZLIBRARY.ZDATA, as a custom "crdt"-magic-prefixed, protobuf-shaped
+    document with its own string-interning pool -- undocumented anywhere
+    publicly, and reverse-engineering its exact tree topology turned out to
+    be unnecessary work: Shortcuts.app exposes the same information
+    directly and reliably through its own public scripting dictionary
+    (`sdef /System/Applications/Shortcuts.app` -- every `shortcut` has a
+    `folder` property), which is what this function actually uses.
+
+    This needs the Automation permission for whatever process runs this to
+    control "Shortcuts Events" (a one-time system permission prompt), not
+    Full Disk Access -- a different gate than everything else in this
+    module. Before that permission is granted, even the simplest possible
+    AppleScript call (e.g. `count shortcuts`) hangs indefinitely rather
+    than failing outright, which is why this has an explicit timeout
+    (raises `subprocess.TimeoutExpired` instead of hanging the caller).
+
+    Returns {"folders": [{"name": ..., "id": ...}, ...],
+             "shortcuts": {shortcut_name: folder_name_or_None, ...}}.
+    """
+    result = subprocess.run(
+        ["osascript", "-e", _FOLDER_APPLESCRIPT],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=True,
+    )
+    folder_part, _, shortcut_part = result.stdout.partition("===SPLIT===")
+    folders = []
+    for line in folder_part.splitlines():
+        if not line:
+            continue
+        name, _, fid = line.partition("\t")
+        folders.append({"name": name, "id": fid})
+    shortcuts = {}
+    for line in shortcut_part.splitlines():
+        if not line:
+            continue
+        name, _, fname = line.partition("\t")
+        shortcuts[name] = fname or None
+    return {"folders": folders, "shortcuts": shortcuts}

@@ -7,10 +7,11 @@ entry (see https://developer.glympse.com/docs/core/app/schema/reference,
 instead of being sent to anyone. So: build the same glympse3:// URL the
 real Davina/Seletar shortcuts build (via Glympse Input's exact pattern),
 but with recipients=[{"type":"clipboard"}], wait for Glympse to return,
-read the link back off the clipboard, then open Telegram's own share
-scheme (tg://msg_url?url=...&text=...) with that link pre-filled. Telegram
-has no URL-scheme way to auto-send without a bot/token, so this opens
-Telegram's contact picker with the message ready -- you still tap Send.
+read the link back off the clipboard, then open Telegram's direct-chat
+scheme (tg://resolve?domain=<username>&text=...) -- this jumps straight to
+one specific chat (no contact picker) with the message pre-filled, as long
+as that chat has a public @username. Telegram has no URL-scheme way to
+auto-send without a bot/token, so you still tap Send once you land there.
 
 There's already a "Test Send Glympse URL" shortcut in the library using a
 different, simplified scheme (glympse://?rec_type=clipboard&...,
@@ -32,8 +33,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shortcuts_manager import action, new_workflow, write_unsigned, sign
 
 OUT_DIR = Path(__file__).resolve().parent
-TEST_ADDRESS = "Marina Bay Sands, Singapore"  # obviously-public landmark, not a real address of the owner's
+# A real street address, not a landmark/POI name: Glympse Serialise
+# Destination's Address action builds a *structured* address (WFAddressLine1
+# = this text, plus hardcoded City='Singapore'/Country='Singapore' -- that's
+# why the real Davina/Seletar shortcuts hardcode bare street names like
+# "Seletar Close") and forward-geocodes that exact structure. A landmark
+# name like "Marina Bay Sands" isn't a literal street, so structured-address
+# geocoding correctly finds nothing (kCLErrorGeocodeFoundNoResult /
+# kCLErrorDomain error 8) even though a general place search would resolve
+# it instantly. This is the landmark's own real, public street address.
+TEST_ADDRESS = "1 Bayfront Avenue"  # Marina Bay Sands' public street address, not the owner's
 TELEGRAM_BLURB = "Here's my live location, tap to view:"
+TELEGRAM_USERNAME = "ttimothy"  # public @username to jump straight to, no contact picker
 
 
 def literal(text):
@@ -175,33 +186,31 @@ actions.append(a)
 
 actions.append(action("is.workflow.actions.setvariable", {"WFInput": output_ref("Clipboard", clip_uuid), "WFVariableName": "GlympseLink"}))
 
-# 7. Build Telegram's share-sheet URL: tg://msg_url?url=<link>&text=<blurb>.
-a = action("is.workflow.actions.urlencode", {"WFInput": literal(TELEGRAM_BLURB)})
-a["WFWorkflowActionParameters"]["UUID"] = (blurb_enc_uuid := "10000000-0000-0000-0000-00000000000b")
-actions.append(a)
-
-actions.append(
-    action("is.workflow.actions.setvariable", {"WFInput": output_ref("URL Encoded Text", blurb_enc_uuid), "WFVariableName": "TelegramText"})
-)
-
-a = action("is.workflow.actions.urlencode", {"WFInput": var_ref("GlympseLink")})
-a["WFWorkflowActionParameters"]["UUID"] = (link_enc_uuid := "10000000-0000-0000-0000-00000000000c")
-actions.append(a)
-
-actions.append(
-    action("is.workflow.actions.setvariable", {"WFInput": output_ref("URL Encoded Text", link_enc_uuid), "WFVariableName": "LinkEncoded"})
-)
-
-telegram_template = "tg://msg_url?url=￼&text=￼"
+# 7. Build Telegram's direct-chat URL: tg://resolve?domain=<username>&text=<draft>.
+# resolve jumps straight to that one chat with `text` pre-filled -- no contact
+# picker -- as long as the target has a public @username. (A private group
+# without one can only be reached via its invite link, which can't pre-fill
+# text; dropped from this test shortcut since it adds a manual-paste step.)
+draft_template = f"{TELEGRAM_BLURB} ￼"
 a = action(
     "is.workflow.actions.gettext",
-    {
-        "WFTextActionText": template_text(
-            telegram_template,
-            url={"Type": "Variable", "VariableName": "LinkEncoded"},
-            text={"Type": "Variable", "VariableName": "TelegramText"},
-        )
-    },
+    {"WFTextActionText": template_text(draft_template, link={"Type": "Variable", "VariableName": "GlympseLink"})},
+)
+a["WFWorkflowActionParameters"]["UUID"] = (draft_uuid := "10000000-0000-0000-0000-00000000000b")
+actions.append(a)
+
+a = action("is.workflow.actions.urlencode", {"WFInput": output_ref("Text", draft_uuid)})
+a["WFWorkflowActionParameters"]["UUID"] = (draft_enc_uuid := "10000000-0000-0000-0000-00000000000c")
+actions.append(a)
+
+actions.append(
+    action("is.workflow.actions.setvariable", {"WFInput": output_ref("URL Encoded Text", draft_enc_uuid), "WFVariableName": "TelegramText"})
+)
+
+telegram_template = f"tg://resolve?domain={TELEGRAM_USERNAME}&text=￼"
+a = action(
+    "is.workflow.actions.gettext",
+    {"WFTextActionText": template_text(telegram_template, text={"Type": "Variable", "VariableName": "TelegramText"})},
 )
 a["WFWorkflowActionParameters"]["UUID"] = (tg_text_uuid := "10000000-0000-0000-0000-00000000000d")
 actions.append(a)
